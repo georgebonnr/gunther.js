@@ -1,4 +1,5 @@
-var helpers =   require('./audioHelpers.js');
+var helpers =   require('./helpers.js');
+var pitchHelpers = require('./pitchhelpers.js');
 
 module.exports = function(context,source) {
   var analyser = helpers.makeAnalyser(context,2048,-30,-144);
@@ -6,10 +7,22 @@ module.exports = function(context,source) {
   source.connect(analyser);
   var _FFT = new Float32Array(analyser.frequencyBinCount);
 
-  var _findMaxWithI = function(array) {
-    var max = Math.max.apply(Math, array);
-    var index = Array.prototype.indexOf.call(array,max);
-    return [[index-1,array[index-1]],[index,max],[index+1,array[index+1]]];
+  var _noiseCancel = function(freq,diff) {
+    notchStrength = 0.7;
+    var amt = diff*notchStrength;
+    console.log("adding noise cancelling filter at "+freq+
+                "hz with gain "+amt);
+    source.disconnect(analyser);
+    var filter = helpers.makeFilter(context,"PEAKING",freq,amt);
+    var chain = analyser.ncFilters;
+    if (chain) {
+      chain.add(filter);
+    } else {
+      chain = analyser.ncFilters = helpers.makeNodeChain();
+      chain.add(filter);
+      source.connect(chain.first);
+      chain.connect(analyser);
+    }
   };
 
   var _convertToHz = function(buckets) {
@@ -20,44 +33,6 @@ module.exports = function(context,source) {
     var aShift = (shift*0.5)*0.1;
     var f = targetFreq+aShift;
     return f/analyser.frequencyBinCount*(context.sampleRate*0.5);
-  };
-
-  var _getPeaks = function(array) {
-    var sum = 0;
-    var freqs = {};
-    var i = array.length;
-    while(i--) {
-      var vol = array[i].volume;
-      var freq = Math.round(array[i].hz / 5) * 5;
-      if (freqs[freq]) {
-        freqs[freq].hits+=1;
-        freqs[freq].vol+=vol;
-      } else {
-        freqs[freq] = {hits:1,vol:vol};
-      }
-      sum+=vol;
-    }
-    return {
-      avg: sum/array.length,
-      freqs: freqs
-    };
-  };
-
-  var _noiseCancel = function(freq,diff) {
-    notchStrength = 0.7;
-    var amt = diff*notchStrength;
-    console.log("adding noise cancelling filter at "+freq+"hz with gain "+amt);
-    source.disconnect(analyser);
-    var filter = helpers.makeFilter(context,"PEAKING",freq,amt);
-    var chain = analyser.ncFilters;
-    if (chain) {
-      chain.add(filter);
-    } else {
-      chain = analyser.ncFilters = helpers.nodeChain();
-      chain.add(filter);
-      source.connect(chain.first);
-      chain.connect(analyser);
-    }
   };
 
   var _setThresh = function(avg,tStr) {
@@ -76,17 +51,17 @@ module.exports = function(context,source) {
     var results = [];
     var tick = function() {
       analyser.getFloatFrequencyData(_FFT);
-      var fftIndex = _findMaxWithI(_FFT);
+      var fftIndex = pitchHelpers.findMaxWithI(_FFT);
       var sample = {
         volume: fftIndex[1][1],
-        hz: _convertToHz(fftIndex)
+        hz: _convertToHz(fftIndex,context,analyser.frequencyBinCount)
       };
       results.push(sample);
       var cur = new Date().getTime();
       if (cur < e) {
         setTimeout(tick,interval);
       } else {
-        var data = _getPeaks(results);
+        var data = pitchHelpers.getPeaks(results);
         for (var f in data.freqs) {
           var freq = data.freqs[f];
           var freqAvg = freq.vol/freq.hits;
@@ -124,7 +99,7 @@ module.exports = function(context,source) {
     var startInterval = function(){
       return setInterval(function(){
         analyser.getFloatFrequencyData(_FFT);
-        var targetRange = _findMaxWithI(_FFT);
+        var targetRange = pitchHelpers.findMaxWithI(_FFT);
         var volume = targetRange[1][1];
         var hz = _convertToHz(targetRange);
         var data = {
