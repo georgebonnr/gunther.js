@@ -1,8 +1,10 @@
-var helpers =   require('./helpers.js');
+var makeFilter = require('./makeFilter.js');
+var makeNodeChain = require('./makeNodeChain');
+var makeAnalyser = require('./makeAnalyser');
 var pitchHelpers = require('./pitchhelpers.js');
 
 module.exports = function(context,source) {
-  var analyser = helpers.makeAnalyser(context,2048,-30,-144);
+  var analyser = makeAnalyser(context,2048,-30,-144);
   analyser.threshold = analyser.minDecibels;
   source.connect(analyser);
   var _FFT = new Float32Array(analyser.frequencyBinCount);
@@ -13,12 +15,12 @@ module.exports = function(context,source) {
     console.log("adding noise cancelling filter at "+freq+
                 "hz with gain "+amt);
     source.disconnect(analyser);
-    var filter = helpers.makeFilter(context,"PEAKING",freq,amt);
+    var filter = makeFilter(context,"PEAKING",freq,amt);
     var chain = analyser.ncFilters;
     if (chain) {
       chain.add(filter);
     } else {
-      chain = analyser.ncFilters = helpers.makeNodeChain();
+      chain = analyser.ncFilters = makeNodeChain();
       chain.add(filter);
       source.connect(chain.first);
       chain.connect(analyser);
@@ -95,18 +97,22 @@ module.exports = function(context,source) {
     _analyseEnv(time,tStrength,callback);
   };
 
+  analyser.process = function(callback) {
+    this.getFloatFrequencyData(_FFT);
+    var targetRange = pitchHelpers.findMaxWithI(_FFT);
+    var volume = targetRange[1][1];
+    var hz = _convertToHz(targetRange);
+    var data = {
+      hz: hz,
+      volume: volume
+    };
+    callback(data);
+  };
+
   analyser.start = function(interval,smooth,callback){
     var startInterval = function(){
       return setInterval(function(){
-        analyser.getFloatFrequencyData(_FFT);
-        var targetRange = pitchHelpers.findMaxWithI(_FFT);
-        var volume = targetRange[1][1];
-        var hz = _convertToHz(targetRange);
-        var data = {
-          hz: hz,
-          volume: volume
-        };
-        callback(data);
+        analyser.process(callback);
       }, interval);
     };
     if (typeof(interval) === 'function') {
